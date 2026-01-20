@@ -11,7 +11,7 @@ import serial
 app = Flask(__name__)
 
 DEFAULT_PORT = os.getenv("CNC_PORT", "COM13")
-DEFAULT_BAUD = int(os.getenv("CNC_BAUD", "115200"))
+DEFAULT_BAUD = int(os.getenv("CNC_BAUD", "250000"))
 
 LOG_LIMIT = 500
 
@@ -97,6 +97,19 @@ class SerialManager:
             self._ser.write(payload)
             self._ser.flush()
 
+    def send_many(self, lines):
+        clean = [line.strip() for line in lines if line and line.strip()]
+        if not clean:
+            return
+        with self._lock:
+            if not self._ser or not self._ser.is_open:
+                raise RuntimeError("Not connected")
+            for line in clean:
+                self._append_log("send", line)
+                payload = (line + "\n").encode()
+                self._ser.write(payload)
+            self._ser.flush()
+
     def is_connected(self):
         with self._lock:
             return bool(self._ser and self._ser.is_open)
@@ -120,11 +133,8 @@ INDEX_HTML = """
         margin: 20px;
         background: #f4f7f9;
       }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(80px, 1fr));
-        gap: 8px;
-        max-width: 280px;
+      button, select, input, textarea {
+        font-family: inherit;
       }
       button {
         padding: 10px 12px;
@@ -155,13 +165,59 @@ INDEX_HTML = """
         font-family: Consolas, monospace;
         font-size: 12px;
       }
-      input[type="text"] {
+      input[type="text"], input[type="number"], select {
         padding: 8px;
-        width: 260px;
       }
       .muted {
         color: #5b6b7a;
         font-size: 12px;
+      }
+      .jog-layout {
+        display: grid;
+        grid-template-columns: repeat(3, 64px);
+        grid-template-rows: repeat(3, 64px);
+        gap: 6px;
+        justify-content: center;
+        align-items: center;
+      }
+      .jog-layout button {
+        width: 64px;
+        height: 64px;
+      }
+      .jog-z {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-left: 16px;
+      }
+      .jog-wrap {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .canvas-wrap {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      canvas {
+        background: #fafcff;
+        border: 1px solid #d6dde5;
+        border-radius: 8px;
+      }
+      .field-group {
+        display: grid;
+        grid-template-columns: 140px 140px;
+        gap: 8px;
+        align-items: center;
+      }
+      .field-group label {
+        font-size: 12px;
+        color: #5b6b7a;
+      }
+      .field-group input {
+        width: 120px;
       }
     </style>
   </head>
@@ -171,7 +227,15 @@ INDEX_HTML = """
         <label class="muted">Port</label>
         <input id="port" type="text" value="COM13" />
         <label class="muted">Baud</label>
-        <input id="baud" type="text" value="115200" />
+        <select id="baud">
+          <option value="250000" selected>250000</option>
+          <option value="115200">115200</option>
+          <option value="230400">230400</option>
+          <option value="57600">57600</option>
+          <option value="38400">38400</option>
+          <option value="19200">19200</option>
+          <option value="9600">9600</option>
+        </select>
         <button onclick="connect()">Connect</button>
         <button onclick="disconnect()">Disconnect</button>
         <span id="status" class="muted">Disconnected</span>
@@ -184,22 +248,25 @@ INDEX_HTML = """
         <button onclick="setStep(0.1)">0.1mm</button>
         <button onclick="setStep(1)">1mm</button>
         <button onclick="setStep(10)">10mm</button>
+        <button onclick="setStep(100)">100mm</button>
         <span class="muted">Current: <span id="step-label">1</span>mm</span>
       </div>
       <div style="height: 12px;"></div>
-      <div class="row">
-        <div>
-          <div class="grid">
-            <button onclick="jog('Y', step)">+Y</button>
-            <button onclick="jog('Z', step)">+Z</button>
-            <button onclick="jog('X', step)">+X</button>
-            <button onclick="jog('Y', -step)">-Y</button>
-            <button onclick="jog('Z', -step)">-Z</button>
-            <button onclick="jog('X', -step)">-X</button>
-          </div>
-          <div class="muted" style="margin-top: 8px;">
-            Jog uses G91 / G0 / G90 sequence.
-          </div>
+      <div class="jog-wrap">
+        <div class="jog-layout">
+          <div></div>
+          <button onclick="jog('Y', step)">Y+</button>
+          <div></div>
+          <button onclick="jog('X', -step)">X-</button>
+          <div></div>
+          <button onclick="jog('X', step)">X+</button>
+          <div></div>
+          <button onclick="jog('Y', -step)">Y-</button>
+          <div></div>
+        </div>
+        <div class="jog-z">
+          <button onclick="jog('Z', step)">Z+</button>
+          <button onclick="jog('Z', -step)">Z-</button>
         </div>
         <div>
           <div class="row">
@@ -225,8 +292,63 @@ INDEX_HTML = """
 
     <div class="card">
       <div class="row">
+        <strong>2D position + path</strong>
+      </div>
+      <div style="height: 12px;"></div>
+      <div class="canvas-wrap">
+        <canvas id="plot" width="420" height="320"></canvas>
+        <div>
+          <div class="field-group">
+            <label>Center X (mm)</label>
+            <input id="path-cx" type="number" step="0.1" value="0" />
+            <label>Center Y (mm)</label>
+            <input id="path-cy" type="number" step="0.1" value="0" />
+            <label>Width (mm)</label>
+            <input id="path-w" type="number" step="0.1" value="41.8" />
+            <label>Height (mm)</label>
+            <input id="path-h" type="number" step="0.1" value="42.3" />
+            <label>Tool Ø (mm)</label>
+            <input id="path-d" type="number" step="0.1" value="6.0" />
+            <label>Feed (mm/min)</label>
+            <input id="path-f" type="number" step="1" value="1500" />
+            <label>Move dx</label>
+            <input id="path-dx" type="number" step="0.1" value="0" />
+            <label>Move dy</label>
+            <input id="path-dy" type="number" step="0.1" value="0" />
+            <label>Limits Xmin</label>
+            <input id="lim-xmin" type="number" step="1" value="" />
+            <label>Limits Xmax</label>
+            <input id="lim-xmax" type="number" step="1" value="" />
+            <label>Limits Ymin</label>
+            <input id="lim-ymin" type="number" step="1" value="" />
+            <label>Limits Ymax</label>
+            <input id="lim-ymax" type="number" step="1" value="" />
+          </div>
+          <div style="height: 10px;"></div>
+          <div class="row">
+            <button onclick="autoHome()">Auto home (G28)</button>
+            <button onclick="setCenterToCurrent()">Use current as center</button>
+            <button onclick="addPath()">Add path</button>
+            <button onclick="movePath()">Move path</button>
+            <button onclick="clearPath()">Remove path</button>
+          </div>
+          <div class="row" style="margin-top: 10px;">
+            <button onclick="playPath()">Play path</button>
+            <label class="muted">
+              <input type="checkbox" id="path-rapid" checked />
+              Rapid to start
+            </label>
+          </div>
+          <div class="muted" style="margin-top: 8px;">
+            Toolpath is width/height minus tool diameter, with rounded corners (r = tool Ø/2).
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
         <strong>G-code log</strong>
-        <button onclick="refreshLog()">Refresh</button>
       </div>
       <textarea id="log" readonly></textarea>
     </div>
@@ -234,6 +356,10 @@ INDEX_HTML = """
     <script>
       let step = 1;
       let autoTimer = null;
+      let logTimer = null;
+      let positionTimer = null;
+      let currentPos = { x: null, y: null, z: null };
+      let path = null;
 
       function setStep(value) {
         step = value;
@@ -251,6 +377,7 @@ INDEX_HTML = """
         const data = await res.json();
         document.getElementById("status").textContent = data.status;
         refreshLog();
+        await queryPosition();
       }
 
       async function disconnect() {
@@ -267,6 +394,7 @@ INDEX_HTML = """
           body: JSON.stringify({ axis, distance })
         });
         refreshLog();
+        await queryPosition();
       }
 
       async function sendGcode() {
@@ -280,13 +408,19 @@ INDEX_HTML = """
         });
         input.value = "";
         refreshLog();
+        await queryPosition();
       }
 
       async function refreshLog() {
         const res = await fetch("/log");
         const data = await res.json();
         const lines = data.log.map(entry => `[${entry.ts}] ${entry.dir}: ${entry.line}`);
-        document.getElementById("log").value = lines.join("\\n");
+        const textarea = document.getElementById("log");
+        const nearBottom = textarea.scrollHeight - textarea.scrollTop - textarea.clientHeight < 30;
+        textarea.value = lines.join("\\n");
+        if (nearBottom) {
+          textarea.scrollTop = textarea.scrollHeight;
+        }
       }
 
       async function queryPosition() {
@@ -297,11 +431,19 @@ INDEX_HTML = """
       async function refreshPosition() {
         const res = await fetch("/position");
         const data = await res.json();
-        if (data.position && data.position.raw) {
-          document.getElementById("position").textContent = data.position.raw;
+        if (data.position) {
+          currentPos = {
+            x: data.position.x,
+            y: data.position.y,
+            z: data.position.z
+          };
+          if (data.position.raw) {
+            document.getElementById("position").textContent = data.position.raw;
+          }
         } else {
           document.getElementById("position").textContent = "unknown";
         }
+        drawPlot();
       }
 
       function toggleAutoM114() {
@@ -314,8 +456,308 @@ INDEX_HTML = """
         }
       }
 
+      function parseNumber(id) {
+        const val = document.getElementById(id).value;
+        const num = parseFloat(val);
+        return Number.isFinite(num) ? num : null;
+      }
+
+      function setCenterToCurrent() {
+        if (currentPos.x === null || currentPos.y === null) return;
+        document.getElementById("path-cx").value = currentPos.x.toFixed(2);
+        document.getElementById("path-cy").value = currentPos.y.toFixed(2);
+      }
+
+      function addPath() {
+        const cx = parseNumber("path-cx");
+        const cy = parseNumber("path-cy");
+        const w = parseNumber("path-w");
+        const h = parseNumber("path-h");
+        const d = parseNumber("path-d");
+        if (cx === null || cy === null || w === null || h === null || d === null) return;
+        const toolW = w - d;
+        const toolH = h - d;
+        if (toolW <= 0 || toolH <= 0) {
+          alert("Width/height must be larger than tool diameter.");
+          return;
+        }
+        path = {
+          cx,
+          cy,
+          w,
+          h,
+          d,
+          toolW,
+          toolH
+        };
+        drawPlot();
+      }
+
+      function movePath() {
+        if (!path) return;
+        const dx = parseNumber("path-dx") || 0;
+        const dy = parseNumber("path-dy") || 0;
+        path.cx += dx;
+        path.cy += dy;
+        document.getElementById("path-cx").value = path.cx.toFixed(2);
+        document.getElementById("path-cy").value = path.cy.toFixed(2);
+        drawPlot();
+      }
+
+      function clearPath() {
+        path = null;
+        drawPlot();
+      }
+
+      function buildRoundedPathPoints(cx, cy, w, h, r, segments) {
+        const pts = [];
+        const hw = w / 2;
+        const hh = h / 2;
+        const radius = Math.min(r, hw, hh);
+        const addArc = (centerX, centerY, start, end) => {
+          for (let i = 0; i <= segments; i++) {
+            const t = start + (end - start) * (i / segments);
+            pts.push({
+              x: centerX + Math.cos(t) * radius,
+              y: centerY + Math.sin(t) * radius
+            });
+          }
+        };
+        if (radius <= 0) {
+          pts.push(
+            { x: cx - hw, y: cy + hh },
+            { x: cx + hw, y: cy + hh },
+            { x: cx + hw, y: cy - hh },
+            { x: cx - hw, y: cy - hh },
+            { x: cx - hw, y: cy + hh }
+          );
+          return pts;
+        }
+        // Start at top edge, left to right, then clockwise.
+        pts.push({ x: cx - hw + radius, y: cy + hh });
+        pts.push({ x: cx + hw - radius, y: cy + hh });
+        addArc(cx + hw - radius, cy + hh - radius, Math.PI / 2, 0);
+        pts.push({ x: cx + hw, y: cy - hh + radius });
+        addArc(cx + hw - radius, cy - hh + radius, 0, -Math.PI / 2);
+        pts.push({ x: cx - hw + radius, y: cy - hh });
+        addArc(cx - hw + radius, cy - hh + radius, -Math.PI / 2, -Math.PI);
+        pts.push({ x: cx - hw, y: cy + hh - radius });
+        addArc(cx - hw + radius, cy + hh - radius, -Math.PI, -1.5 * Math.PI);
+        pts.push({ x: cx - hw + radius, y: cy + hh });
+        return pts;
+      }
+
+      function buildRectPathPoints(cx, cy, w, h) {
+        const hw = w / 2;
+        const hh = h / 2;
+        return [
+          { x: cx, y: cy + hh },
+          { x: cx + hw, y: cy + hh },
+          { x: cx + hw, y: cy - hh },
+          { x: cx - hw, y: cy - hh },
+          { x: cx - hw, y: cy + hh },
+          { x: cx, y: cy + hh }
+        ];
+      }
+
+      async function playPath() {
+        if (!path) return;
+        const feed = parseNumber("path-f") || 1500;
+        const points = buildRectPathPoints(path.cx, path.cy, path.toolW, path.toolH);
+        if (points.length < 2) return;
+        const lines = [];
+        lines.push("G90");
+        if (document.getElementById("path-rapid").checked) {
+          lines.push(`G0 X${points[0].x.toFixed(3)} Y${points[0].y.toFixed(3)}`);
+        } else {
+          lines.push(`G1 F${feed} X${points[0].x.toFixed(3)} Y${points[0].y.toFixed(3)}`);
+        }
+        lines.push(`G1 F${feed}`);
+        for (let i = 1; i < points.length; i++) {
+          lines.push(`G1 X${points[i].x.toFixed(3)} Y${points[i].y.toFixed(3)}`);
+        }
+        await fetch("/send_batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lines })
+        });
+        refreshLog();
+        await queryPosition();
+      }
+
+      async function autoHome() {
+        await fetch("/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ line: "G28" })
+        });
+        refreshLog();
+        await queryPosition();
+      }
+
+      function updateCanvasSize() {
+        const limXMin = parseNumber("lim-xmin");
+        const limXMax = parseNumber("lim-xmax");
+        const limYMin = parseNumber("lim-ymin");
+        const limYMax = parseNumber("lim-ymax");
+        const canvas = document.getElementById("plot");
+        if (limXMin === null || limXMax === null || limYMin === null || limYMax === null) {
+          return;
+        }
+        if (limXMax === limXMin || limYMax === limYMin) {
+          return;
+        }
+        const width = 420;
+        const ratio = Math.abs((limYMax - limYMin) / (limXMax - limXMin));
+        const height = Math.max(240, Math.min(520, Math.round(width * ratio)));
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      function drawPlot() {
+        const canvas = document.getElementById("plot");
+        const ctx = canvas.getContext("2d");
+        const width = canvas.width;
+        const height = canvas.height;
+        ctx.clearRect(0, 0, width, height);
+
+        const limXMin = parseNumber("lim-xmin");
+        const limXMax = parseNumber("lim-xmax");
+        const limYMin = parseNumber("lim-ymin");
+        const limYMax = parseNumber("lim-ymax");
+
+        let xmin = limXMin;
+        let xmax = limXMax;
+        let ymin = limYMin;
+        let ymax = limYMax;
+
+        if (xmin === null || xmax === null || ymin === null || ymax === null || xmin === xmax || ymin === ymax) {
+          const pad = 20;
+          const focus = path ? {
+            xmin: path.cx - path.w / 2 - pad,
+            xmax: path.cx + path.w / 2 + pad,
+            ymin: path.cy - path.h / 2 - pad,
+            ymax: path.cy + path.h / 2 + pad
+          } : null;
+          if (focus) {
+            xmin = focus.xmin;
+            xmax = focus.xmax;
+            ymin = focus.ymin;
+            ymax = focus.ymax;
+          } else if (currentPos.x !== null && currentPos.y !== null) {
+            xmin = currentPos.x - 50;
+            xmax = currentPos.x + 50;
+            ymin = currentPos.y - 50;
+            ymax = currentPos.y + 50;
+          } else {
+            xmin = 0;
+            xmax = 200;
+            ymin = 0;
+            ymax = 200;
+          }
+        }
+
+        const scaleX = width / (xmax - xmin);
+        const scaleY = height / (ymax - ymin);
+
+        const mapX = x => (x - xmin) * scaleX;
+        const mapY = y => height - (y - ymin) * scaleY;
+
+        ctx.strokeStyle = "#e1e8f0";
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 10; i++) {
+          const x = (width / 10) * i;
+          const y = (height / 10) * i;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+
+        if (path) {
+          // Finished rectangle (nominal cutout).
+          ctx.strokeStyle = "#94a3b8";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 4]);
+          const hw = path.w / 2;
+          const hh = path.h / 2;
+          ctx.strokeRect(
+            mapX(path.cx - hw),
+            mapY(path.cy + hh),
+            (path.w) * scaleX,
+            -(path.h) * scaleY
+          );
+          ctx.setLineDash([]);
+
+          // Tool center path with rounded corners.
+          ctx.strokeStyle = "#1f6feb";
+          ctx.lineWidth = 2;
+          const r = path.d / 2;
+          const points = buildRoundedPathPoints(path.cx, path.cy, path.toolW, path.toolH, r, 12);
+          if (points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(mapX(points[0].x), mapY(points[0].y));
+            for (let i = 1; i < points.length; i++) {
+              ctx.lineTo(mapX(points[i].x), mapY(points[i].y));
+            }
+            ctx.stroke();
+          }
+        }
+
+        if (currentPos.x !== null && currentPos.y !== null) {
+          ctx.fillStyle = "#e63946";
+          ctx.beginPath();
+          ctx.arc(mapX(currentPos.x), mapY(currentPos.y), 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      function startAutoRefresh() {
+        if (!logTimer) {
+          logTimer = setInterval(refreshLog, 1000);
+        }
+        if (!positionTimer) {
+          positionTimer = setInterval(refreshPosition, 2000);
+        }
+      }
+
+      function saveLimits() {
+        const fields = ["lim-xmin", "lim-xmax", "lim-ymin", "lim-ymax"];
+        fields.forEach(id => {
+          const val = document.getElementById(id).value;
+          localStorage.setItem(id, val);
+        });
+        updateCanvasSize();
+        drawPlot();
+      }
+
+      function loadLimits() {
+        const fields = ["lim-xmin", "lim-xmax", "lim-ymin", "lim-ymax"];
+        fields.forEach(id => {
+          const stored = localStorage.getItem(id);
+          if (stored !== null) {
+            document.getElementById(id).value = stored;
+          }
+        });
+        updateCanvasSize();
+      }
+
+      ["lim-xmin", "lim-xmax", "lim-ymin", "lim-ymax"].forEach(id => {
+        document.addEventListener("input", event => {
+          if (event.target && event.target.id === id) {
+            saveLimits();
+          }
+        });
+      });
+
+      loadLimits();
       refreshLog();
       refreshPosition();
+      startAutoRefresh();
     </script>
   </body>
 </html>
@@ -368,6 +810,17 @@ def send():
     line = data.get("line", "")
     try:
         manager.send(line)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"ok": True})
+
+
+@app.post("/send_batch")
+def send_batch():
+    data = request.get_json(force=True)
+    lines = data.get("lines", [])
+    try:
+        manager.send_many(lines)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
     return jsonify({"ok": True})
