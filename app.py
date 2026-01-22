@@ -311,10 +311,6 @@ INDEX_HTML = """
             <input id="path-d" type="number" step="0.1" value="6.0" />
             <label>Feed (mm/min)</label>
             <input id="path-f" type="number" step="1" value="1500" />
-            <label>Move dx</label>
-            <input id="path-dx" type="number" step="0.1" value="0" />
-            <label>Move dy</label>
-            <input id="path-dy" type="number" step="0.1" value="0" />
             <label>Limits Xmin</label>
             <input id="lim-xmin" type="number" step="1" value="" />
             <label>Limits Xmax</label>
@@ -323,13 +319,14 @@ INDEX_HTML = """
             <input id="lim-ymin" type="number" step="1" value="" />
             <label>Limits Ymax</label>
             <input id="lim-ymax" type="number" step="1" value="" />
+            <label>Use Y max as top</label>
+            <input id="path-use-top" type="checkbox" checked />
           </div>
           <div style="height: 10px;"></div>
           <div class="row">
             <button onclick="autoHome()">Auto home (G28)</button>
             <button onclick="setCenterToCurrent()">Use current as center</button>
             <button onclick="addPath()">Add path</button>
-            <button onclick="movePath()">Move path</button>
             <button onclick="clearPath()">Remove path</button>
           </div>
           <div class="row" style="margin-top: 10px;">
@@ -470,13 +467,23 @@ INDEX_HTML = """
 
       function addPath() {
         const cx = parseNumber("path-cx");
-        const cy = parseNumber("path-cy");
+        let cy = parseNumber("path-cy");
         const w = parseNumber("path-w");
         const h = parseNumber("path-h");
         const d = parseNumber("path-d");
-        if (cx === null || cy === null || w === null || h === null || d === null) return;
+        if (cx === null || w === null || h === null || d === null) return;
         const toolW = w - d;
         const toolH = h - d;
+        const useTop = document.getElementById("path-use-top").checked;
+        if (useTop) {
+          if (currentPos.y === null) {
+            alert("Position unknown. Click 'Query Position (M114)' first.");
+            return;
+          }
+          cy = currentPos.y - toolH / 2;
+          document.getElementById("path-cy").value = cy.toFixed(2);
+        }
+        if (cy === null) return;
         if (toolW <= 0 || toolH <= 0) {
           alert("Width/height must be larger than tool diameter.");
           return;
@@ -490,17 +497,6 @@ INDEX_HTML = """
           toolW,
           toolH
         };
-        drawPlot();
-      }
-
-      function movePath() {
-        if (!path) return;
-        const dx = parseNumber("path-dx") || 0;
-        const dy = parseNumber("path-dy") || 0;
-        path.cx += dx;
-        path.cy += dy;
-        document.getElementById("path-cx").value = path.cx.toFixed(2);
-        document.getElementById("path-cy").value = path.cy.toFixed(2);
         drawPlot();
       }
 
@@ -609,16 +605,24 @@ INDEX_HTML = """
         }
         const width = 420;
         const ratio = Math.abs((limYMax - limYMin) / (limXMax - limXMin));
-        const height = Math.max(240, Math.min(520, Math.round(width * ratio)));
-        canvas.width = width;
-        canvas.height = height;
+        const height = Math.max(240, Math.min(620, Math.round(width * ratio)));
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
       }
 
       function drawPlot() {
         const canvas = document.getElementById("plot");
         const ctx = canvas.getContext("2d");
-        const width = canvas.width;
-        const height = canvas.height;
+        const dpr = window.devicePixelRatio || 1;
+        const width = canvas.clientWidth || canvas.width;
+        const height = canvas.clientHeight || canvas.height;
+        const targetW = Math.round(width * dpr);
+        const targetH = Math.round(height * dpr);
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, width, height);
 
         const limXMin = parseNumber("lim-xmin");
@@ -679,33 +683,28 @@ INDEX_HTML = """
         }
 
         if (path) {
-          // Finished rectangle (nominal cutout).
-          ctx.strokeStyle = "#94a3b8";
-          ctx.lineWidth = 1;
-          ctx.setLineDash([6, 4]);
-          const hw = path.w / 2;
-          const hh = path.h / 2;
-          ctx.strokeRect(
-            mapX(path.cx - hw),
-            mapY(path.cy + hh),
-            (path.w) * scaleX,
-            -(path.h) * scaleY
-          );
-          ctx.setLineDash([]);
-
-          // Tool center path with rounded corners.
-          ctx.strokeStyle = "#1f6feb";
-          ctx.lineWidth = 2;
-          const r = path.d / 2;
-          const points = buildRoundedPathPoints(path.cx, path.cy, path.toolW, path.toolH, r, 12);
-          if (points.length > 1) {
+          const drawPolyline = (points) => {
+            if (!points || points.length < 2) return;
             ctx.beginPath();
             ctx.moveTo(mapX(points[0].x), mapY(points[0].y));
             for (let i = 1; i < points.length; i++) {
               ctx.lineTo(mapX(points[i].x), mapY(points[i].y));
             }
             ctx.stroke();
-          }
+          };
+
+          // Finished rectangle (nominal cutout).
+          ctx.strokeStyle = "#94a3b8";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 4]);
+          drawPolyline(buildRectPathPoints(path.cx, path.cy, path.w, path.h));
+          ctx.setLineDash([]);
+
+          // Tool center path (rounded corners).
+          ctx.strokeStyle = "#1f6feb";
+          ctx.lineWidth = 2;
+          const r = path.d / 2;
+          drawPolyline(buildRoundedPathPoints(path.cx, path.cy, path.toolW, path.toolH, r, 12));
         }
 
         if (currentPos.x !== null && currentPos.y !== null) {
