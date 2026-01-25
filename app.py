@@ -292,6 +292,18 @@ INDEX_HTML = """
         <input id="gcode-input" type="text" placeholder="G-code, e.g. G92 X0 Y0 Z0" />
         <button onclick="sendGcode()">Send</button>
       </div>
+      <div class="row" style="margin-top: 10px;">
+        <label class="muted">Move to</label>
+        <input id="abs-x" type="number" step="0.1" placeholder="X" />
+        <input id="abs-y" type="number" step="0.1" placeholder="Y" />
+        <input id="abs-z" type="number" step="0.1" placeholder="Z" />
+        <label class="muted">
+          <input type="checkbox" id="abs-use-feed" />
+          Use feed
+        </label>
+        <input id="abs-feed" type="number" step="1" value="1500" style="width: 100px;" />
+        <button onclick="moveAbs()">Move</button>
+      </div>
     </div>
 
     <div class="card">
@@ -362,7 +374,12 @@ INDEX_HTML = """
       let path = null;
       const storageKeys = {
         port: "cnc-port",
-        baud: "cnc-baud"
+        baud: "cnc-baud",
+        absX: "cnc-abs-x",
+        absY: "cnc-abs-y",
+        absZ: "cnc-abs-z",
+        absUseFeed: "cnc-abs-use-feed",
+        absFeed: "cnc-abs-feed"
       };
 
       function setStep(value) {
@@ -417,6 +434,68 @@ INDEX_HTML = """
         input.value = "";
         refreshLog();
         await queryPosition();
+      }
+
+      async function moveAbs() {
+        const x = parseNumber("abs-x");
+        const y = parseNumber("abs-y");
+        const z = parseNumber("abs-z");
+        if (x === null && y === null && z === null) return;
+        const parts = [];
+        if (x !== null) parts.push(`X${x.toFixed(3)}`);
+        if (y !== null) parts.push(`Y${y.toFixed(3)}`);
+        if (z !== null) parts.push(`Z${z.toFixed(3)}`);
+        if (!parts.length) return;
+        const useFeed = document.getElementById("abs-use-feed").checked;
+        const feed = parseNumber("abs-feed");
+        const lines = ["G90"];
+        if (useFeed && feed) {
+          lines.push(`G1 F${feed}`);
+          lines.push(`G1 ${parts.join(" ")}`);
+        } else {
+          lines.push(`G0 ${parts.join(" ")}`);
+        }
+        await fetch("/send_batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lines })
+        });
+        refreshLog();
+        await queryPosition();
+      }
+
+      function loadAbsMoveSettings() {
+        const absX = localStorage.getItem(storageKeys.absX);
+        const absY = localStorage.getItem(storageKeys.absY);
+        const absZ = localStorage.getItem(storageKeys.absZ);
+        const absFeed = localStorage.getItem(storageKeys.absFeed);
+        const absUseFeed = localStorage.getItem(storageKeys.absUseFeed);
+        if (absX !== null) document.getElementById("abs-x").value = absX;
+        if (absY !== null) document.getElementById("abs-y").value = absY;
+        if (absZ !== null) document.getElementById("abs-z").value = absZ;
+        if (absFeed !== null) document.getElementById("abs-feed").value = absFeed;
+        if (absUseFeed !== null) {
+          document.getElementById("abs-use-feed").checked = absUseFeed === "true";
+        }
+      }
+
+      function bindAbsMovePersistence() {
+        const fields = [
+          ["abs-x", storageKeys.absX],
+          ["abs-y", storageKeys.absY],
+          ["abs-z", storageKeys.absZ],
+          ["abs-feed", storageKeys.absFeed]
+        ];
+        fields.forEach(([id, key]) => {
+          const el = document.getElementById(id);
+          el.addEventListener("input", () => {
+            localStorage.setItem(key, el.value);
+          });
+        });
+        const useFeed = document.getElementById("abs-use-feed");
+        useFeed.addEventListener("change", () => {
+          localStorage.setItem(storageKeys.absUseFeed, useFeed.checked);
+        });
       }
 
       async function refreshLog() {
@@ -793,6 +872,8 @@ INDEX_HTML = """
 
       loadLimits();
       refreshPorts();
+      loadAbsMoveSettings();
+      bindAbsMovePersistence();
       const storedBaud = localStorage.getItem(storageKeys.baud);
       if (storedBaud) {
         const baudSelect = document.getElementById("baud");
