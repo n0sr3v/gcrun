@@ -21,11 +21,11 @@ Local CNC control and experiment repo for a Marlin + RAMPS 1.4 setup. This READM
 
 ## Notes
 - Default serial port: `COM13`
-- Default baud: `115200` (change in UI if needed, e.g. `250000`)
+- Default baud: `250000` (change in UI if needed)
 - If the UI shows garbled serial output, try another baud rate and reconnect.
+- Port list is loaded from the OS; last selected port + baud are stored locally.
+- The absolute move row stores last-used X/Y/Z and feed settings.
+- Play Path supports an optional Z delta per run (relative, interpolated across segments).
 
 ## TODO
-- Store last COM port and baud; provide a dropdown of available COM ports.
-- Move Auto home (G28) into the X/Y/Z control area.
-- Add a quick "Move to absolute position" UI next to the raw G-code send.
-- Extend Play Path with an optional relative Z increment per run (default 0; positive/negative allowed).
+- None right now (add new tasks as needed).
