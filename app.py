@@ -350,6 +350,8 @@ INDEX_HTML = """
               <input type="checkbox" id="path-rapid" checked />
               Rapid to start
             </label>
+            <label class="muted">Z delta per run</label>
+            <input id="path-zdelta" type="number" step="0.01" value="0" style="width: 90px;" />
           </div>
           <div class="muted" style="margin-top: 8px;">
             Toolpath is width/height minus tool diameter, with rounded corners (r = tool Ø/2).
@@ -676,6 +678,7 @@ INDEX_HTML = """
       async function playPath() {
         if (!path) return;
         const feed = parseNumber("path-f") || 1500;
+        const zDelta = parseNumber("path-zdelta") || 0;
         const points = buildRectPathPoints(path.cx, path.cy, path.toolW, path.toolH);
         if (points.length < 2) return;
         const lines = [];
@@ -685,9 +688,21 @@ INDEX_HTML = """
         } else {
           lines.push(`G1 F${feed} X${points[0].x.toFixed(3)} Y${points[0].y.toFixed(3)}`);
         }
-        lines.push(`G1 F${feed}`);
-        for (let i = 1; i < points.length; i++) {
-          lines.push(`G1 X${points[i].x.toFixed(3)} Y${points[i].y.toFixed(3)}`);
+        if (Math.abs(zDelta) > 0) {
+          const dz = zDelta / (points.length - 1);
+          lines.push("G91");
+          lines.push(`G1 F${feed}`);
+          for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i - 1].x;
+            const dy = points[i].y - points[i - 1].y;
+            lines.push(`G1 X${dx.toFixed(3)} Y${dy.toFixed(3)} Z${dz.toFixed(3)}`);
+          }
+          lines.push("G90");
+        } else {
+          lines.push(`G1 F${feed}`);
+          for (let i = 1; i < points.length; i++) {
+            lines.push(`G1 X${points[i].x.toFixed(3)} Y${points[i].y.toFixed(3)}`);
+          }
         }
         await fetch("/send_batch", {
           method: "POST",
