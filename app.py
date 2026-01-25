@@ -6,6 +6,7 @@ from collections import deque
 
 from flask import Flask, jsonify, render_template_string, request
 import serial
+from serial.tools import list_ports
 
 
 app = Flask(__name__)
@@ -225,7 +226,8 @@ INDEX_HTML = """
     <div class="card">
       <div class="row">
         <label class="muted">Port</label>
-        <input id="port" type="text" value="COM13" />
+        <select id="port"></select>
+        <button onclick="refreshPorts()">Refresh</button>
         <label class="muted">Baud</label>
         <select id="baud">
           <option value="250000" selected>250000</option>
@@ -357,6 +359,10 @@ INDEX_HTML = """
       let positionTimer = null;
       let currentPos = { x: null, y: null, z: null };
       let path = null;
+      const storageKeys = {
+        port: "cnc-port",
+        baud: "cnc-baud"
+      };
 
       function setStep(value) {
         step = value;
@@ -373,6 +379,10 @@ INDEX_HTML = """
         });
         const data = await res.json();
         document.getElementById("status").textContent = data.status;
+        if (res.ok) {
+          localStorage.setItem(storageKeys.port, port);
+          localStorage.setItem(storageKeys.baud, baud);
+        }
         refreshLog();
         await queryPosition();
       }
@@ -457,6 +467,33 @@ INDEX_HTML = """
         const val = document.getElementById(id).value;
         const num = parseFloat(val);
         return Number.isFinite(num) ? num : null;
+      }
+
+      async function refreshPorts() {
+        const select = document.getElementById("port");
+        const stored = localStorage.getItem(storageKeys.port);
+        const res = await fetch("/ports");
+        const data = await res.json();
+        const ports = data.ports || [];
+        select.innerHTML = "";
+        ports.forEach(port => {
+          const option = document.createElement("option");
+          option.value = port.device;
+          option.textContent = port.description ? `${port.device} (${port.description})` : port.device;
+          select.appendChild(option);
+        });
+        const existingValues = Array.from(select.options).map(opt => opt.value);
+        const fallback = stored || "COM13";
+        if (fallback && !existingValues.includes(fallback)) {
+          const option = document.createElement("option");
+          option.value = fallback;
+          option.textContent = `${fallback} (saved)`;
+          select.appendChild(option);
+        }
+        select.value = fallback;
+        select.onchange = () => {
+          localStorage.setItem(storageKeys.port, select.value);
+        };
       }
 
       function setCenterToCurrent() {
@@ -754,6 +791,15 @@ INDEX_HTML = """
       });
 
       loadLimits();
+      refreshPorts();
+      const storedBaud = localStorage.getItem(storageKeys.baud);
+      if (storedBaud) {
+        const baudSelect = document.getElementById("baud");
+        baudSelect.value = storedBaud;
+      }
+      document.getElementById("baud").addEventListener("change", event => {
+        localStorage.setItem(storageKeys.baud, event.target.value);
+      });
       refreshLog();
       refreshPosition();
       startAutoRefresh();
@@ -847,6 +893,18 @@ def request_position():
 @app.get("/status")
 def status():
     return jsonify({"connected": manager.is_connected()})
+
+@app.get("/ports")
+def ports():
+    items = []
+    for port in list_ports.comports():
+        items.append(
+            {
+                "device": port.device,
+                "description": port.description,
+            }
+        )
+    return jsonify({"ports": items})
 
 
 if __name__ == "__main__":
