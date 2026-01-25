@@ -260,7 +260,7 @@ INDEX_HTML = """
           <button onclick="jog('Y', step)">Y+</button>
           <div></div>
           <button onclick="jog('X', -step)">X-</button>
-          <div></div>
+          <button onclick="autoHome()">Home</button>
           <button onclick="jog('X', step)">X+</button>
           <div></div>
           <button onclick="jog('Y', -step)">Y-</button>
@@ -273,6 +273,8 @@ INDEX_HTML = """
         <div>
           <div class="row">
             <button onclick="queryPosition()">Query Position (M114)</button>
+          </div>
+          <div class="row" style="margin-top: 6px;">
             <label class="muted">
               <input type="checkbox" id="auto-m114" onchange="toggleAutoM114()" />
               Auto M114
@@ -326,7 +328,6 @@ INDEX_HTML = """
           </div>
           <div style="height: 10px;"></div>
           <div class="row">
-            <button onclick="autoHome()">Auto home (G28)</button>
             <button onclick="setCenterToCurrent()">Use current as center</button>
             <button onclick="addPath()">Add path</button>
             <button onclick="clearPath()">Remove path</button>
