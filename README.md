@@ -14,12 +14,25 @@ Local CNC control and experiment repo for a Marlin + RAMPS 1.4 setup. This READM
 - If the bridge cannot see the board, check that Android OTG is enabled; on some devices it disables itself after a few minutes.
 - Run `python connect_check.py --command M115` to verify the bridge can reach Marlin before moving the machine.
 
+## Fusion 360 G-code workflow
+- In Manufacture, create a setup whose WCS origin matches the physical touch-off point: bottom-left of the part for X/Y. For the current proven workflow, touch the alloy surface and set the controller reference to `G92 X0 Y0 Z4.2`.
+- Use a 2D Contour operation for the outside profile and rectangular cutouts. Use the 2 mm flat end mill, verify the stock/model orientation from top view, and simulate the job before posting.
+- Prefer GRBL as the Fusion post if no Marlin post is available. FFF/3D-printer posts are not suitable for this CNC-style contour job.
+- In the GRBL post options, use clearance-height retracts instead of `G28` if Fusion exposes that option. If possible, disable arcs or use linear output. If Fusion still emits arcs, the repo converter can linearize them.
+- Do not rely on Fusion spindle commands for this machine. The spindle is controlled manually, so start/stop it by hand and let the G-code only control X/Y/Z.
+- After posting from Fusion, upload/select the original `.nc` file in the web UI and click `Convert Fusion/GRBL to Marlin G0/G1`. Preview the converted file, dry-run the red outer extents at highest Z, then run only the converted file.
+- The converter removes unsafe GRBL/Fusion commands for this Marlin setup: `G28`, `G54`/workspace selection, `T` tool select, `S... M3`, `M5`, `M30`, and plane switches. It linearizes `G2/G3` arcs in `G17/G18/G19` into explicit `G1` moves.
+- Always check the converted Z range before cutting. The known `1001.nc` export cuts down to `Z1.4`, so it expects the scratch surface to be represented as `Z4.2`, not `Z0`.
+
 ## Project index
 - `app.py` — Flask + pyserial CNC control UI. Provides jog controls, M114 position query, raw G-code send, and a full send/receive log.
 - `requirements.txt` — Python dependencies for the web UI.
 - `connect_check.py` — Termux/Android connection diagnostic helper for USB visibility, installed bridge apps, and open local TCP bridge ports.
-- `normalize_marlin_gcode.py` — Converts already-linearized G-code into the explicit Marlin-compatible format used by this machine.
+- `normalize_marlin_gcode.py` — Converts Fusion/GRBL-style G-code into the explicit Marlin-compatible `G0/G1` format used by this machine, including arc linearization.
 - `cnc_job.py` — Command-line G-code runner that validates files and streams one command at a time while waiting for Marlin `ok`.
+- `preperations/1001.nc` — Original Fusion 360 GRBL export used to build and verify the converter.
+- `preperations/chatgpt_fusion360-path-setup_2026-05-21T10-28-14+0200.md` and `preperations/Fusion360 Path Setup_Tought_Process.pdf` — Earlier Fusion setup/conversion analysis notes.
+- `1001_fusion_marlin_converted.nc` — Converter output generated from `preperations/1001.nc`.
 - `1001_marlin_linearized_marlin_zhop_start.nc` — Normalized full job with a safe initial Z-hop before XY travel.
 - `1001_marlin_linearized_marlin.nc` — Normalized full job without the extra initial Z-hop.
 - `1001_marlin_linearized_marlin_resume_from_line70.nc` — Resume variant from the earlier interrupted/manual run.

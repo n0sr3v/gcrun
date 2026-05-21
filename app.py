@@ -6,6 +6,7 @@ import time
 import json
 import subprocess
 from collections import deque
+from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string, request
 import serial
@@ -353,6 +354,16 @@ def build_outer_dry_run_lines(analysis, feed):
     return lines
 
 
+def converted_gcode_name(name):
+    base = os.path.splitext(safe_upload_name(name))[0]
+    candidate = f"{base}_marlin_g01.nc"
+    index = 2
+    while os.path.exists(os.path.join(os.getcwd(), candidate)):
+        candidate = f"{base}_marlin_g01_{index}.nc"
+        index += 1
+    return candidate
+
+
 class GCodeRunner:
     def __init__(self, serial_manager):
         self.manager = serial_manager
@@ -660,6 +671,13 @@ INDEX_HTML = """
         <button onclick="loadGcodePreview()">Preview</button>
       </div>
       <div class="row" style="margin-top: 10px;">
+        <button onclick="convertSelectedGcode()">Convert Fusion/GRBL to Marlin G0/G1</button>
+        <label class="muted">Arc tolerance</label>
+        <input id="convert-tolerance" type="number" step="0.01" value="0.05" style="width: 90px;" />
+        <label class="muted">Initial safe Z</label>
+        <input id="convert-initial-z" type="number" step="0.1" value="16.5" style="width: 90px;" />
+      </div>
+      <div class="row" style="margin-top: 10px;">
         <button onclick="setBottomLeft()">Set bottom-left XY (G92 X0 Y0)</button>
         <label class="muted">Scratch surface Z</label>
         <input id="surface-z" type="number" step="0.01" value="4.2" style="width: 90px;" />
@@ -767,6 +785,8 @@ INDEX_HTML = """
         gcodeFile: "cnc-gcode-file",
         surfaceZ: "cnc-surface-z",
         dryFeed: "cnc-dry-feed",
+        convertTolerance: "cnc-convert-tolerance",
+        convertInitialZ: "cnc-convert-initial-z",
         runSetOrigin: "cnc-run-set-origin",
         absX: "cnc-abs-x",
         absY: "cnc-abs-y",
@@ -939,6 +959,31 @@ INDEX_HTML = """
           document.getElementById("gcode-validation").textContent = first ? `Blocked at line ${first.line}: ${first.message}` : "Blocked";
         }
         drawGcodePreview();
+      }
+
+      async function convertSelectedGcode() {
+        const file = document.getElementById("gcode-file").value;
+        const tolerance = parseNumber("convert-tolerance") || 0.05;
+        const initialZ = parseNumber("convert-initial-z") || 16.5;
+        if (!file) {
+          alert("No G-code file selected.");
+          return;
+        }
+        if (!confirm(`Convert ${file} to a Marlin-safe G0/G1 file?`)) return;
+        const res = await fetch("/convert_gcode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file, tolerance, initial_z: initialZ })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.error || "Conversion failed.");
+          return;
+        }
+        localStorage.setItem(storageKeys.gcodeFile, data.file);
+        await refreshGcodeFiles();
+        document.getElementById("gcode-file").value = data.file;
+        await loadGcodePreview();
       }
 
       function formatPreviewExtents(ranges) {
@@ -1130,9 +1175,13 @@ INDEX_HTML = """
       function loadGcodeSettings() {
         const surfaceZ = localStorage.getItem(storageKeys.surfaceZ);
         const dryFeed = localStorage.getItem(storageKeys.dryFeed);
+        const convertTolerance = localStorage.getItem(storageKeys.convertTolerance);
+        const convertInitialZ = localStorage.getItem(storageKeys.convertInitialZ);
         const runSetOrigin = localStorage.getItem(storageKeys.runSetOrigin);
         if (surfaceZ !== null) document.getElementById("surface-z").value = surfaceZ;
         if (dryFeed !== null) document.getElementById("dry-feed").value = dryFeed;
+        if (convertTolerance !== null) document.getElementById("convert-tolerance").value = convertTolerance;
+        if (convertInitialZ !== null) document.getElementById("convert-initial-z").value = convertInitialZ;
         if (runSetOrigin !== null) {
           document.getElementById("run-set-origin").checked = runSetOrigin === "true";
         }
@@ -1141,6 +1190,12 @@ INDEX_HTML = """
         });
         document.getElementById("dry-feed").addEventListener("input", event => {
           localStorage.setItem(storageKeys.dryFeed, event.target.value);
+        });
+        document.getElementById("convert-tolerance").addEventListener("input", event => {
+          localStorage.setItem(storageKeys.convertTolerance, event.target.value);
+        });
+        document.getElementById("convert-initial-z").addEventListener("input", event => {
+          localStorage.setItem(storageKeys.convertInitialZ, event.target.value);
         });
         document.getElementById("run-set-origin").addEventListener("change", event => {
           localStorage.setItem(storageKeys.runSetOrigin, event.target.checked);
@@ -1666,6 +1721,32 @@ def gcode_preview():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"preview": preview})
+
+
+@app.post("/convert_gcode")
+def convert_gcode():
+    data = request.get_json(force=True)
+    name = data.get("file", "")
+    try:
+        from normalize_marlin_gcode import normalize_file
+
+        src = resolve_gcode_file(name)
+        dst_name = converted_gcode_name(name)
+        dst = os.path.abspath(os.path.join(os.getcwd(), dst_name))
+        tolerance = float(data.get("tolerance") or 0.05)
+        initial_z = float(data.get("initial_z") or 16.5)
+        normalize_file(
+            src=Path(src),
+            dst=Path(dst),
+            tolerance=tolerance,
+            initial_z=initial_z,
+        )
+        preview = analyze_gcode_file(dst_name)
+        if not preview["validation"]["ok"]:
+            raise RuntimeError("Converted file did not pass Marlin validation")
+    except Exception as exc:
+        return jsonify({"error": str(exc), "files": list_gcode_files()}), 400
+    return jsonify({"ok": True, "file": dst_name, "preview": preview, "files": list_gcode_files()})
 
 
 @app.get("/run_gcode")
