@@ -24,8 +24,9 @@ This repo controls a Marlin/RAMPS-style machine from Android Termux. Treat it as
   - `X`: `0.0 .. 189.4`
   - `Y`: `0.0 .. 46.55`
   - `Z`: `1.4 .. 16.5`
-- Proven touch-off convention for `1001`: user touches/scratches the alloy surface at bottom-left, then sets `G92 X0 Y0 Z4.2`.
-- This means the physical surface is represented as `Z4.2`, and the file cuts down to about `Z1.4`. Do not “correct” this to top-of-stock `Z0` unless the user explicitly changes the Fusion setup and wants that convention.
+- Earlier proven touch-off convention for the first `1001` job: user touched/scratched the alloy surface at bottom-left, then set `G92 X0 Y0 Z4.2`.
+- Newer Fusion exports may use the corrected CNC convention: physical top surface is `Z0`, cutting depths are negative, and scratch/touch-off should use `G92 X0 Y0 Z0`.
+- Always inspect the selected file's Z range before setting the scratch reference. A file with negative cutting Z expects top-surface `Z0`; a file with only positive cutting Z may be using the older `Z4.2` surface convention.
 - The user observed Z motion seemed strange, possibly due firmware steps/mm or mechanical calibration. Always surface Z-range and depth assumptions before cutting.
 
 ## Communication / Safety Rules
@@ -93,7 +94,7 @@ Fusion setup:
 - Tool: 2 mm flat end mill.
 - Operation: 2D Contour for surrounding cut and inner rectangular cutouts.
 - Simulate in Fusion before posting.
-- Set WCS/origin deliberately. For the current physical workflow, bottom-left X/Y and a nonzero surface Z convention are used.
+- Set WCS/origin deliberately. For corrected top-surface-zero jobs, use bottom-left X/Y and top stock surface as `Z0`.
 - If the physical workflow is changed to top-of-stock `Z0`, the Fusion setup and posted Z values must change; do not assume.
 
 Post processor:
@@ -114,7 +115,7 @@ Known problematic GRBL/Fusion commands for Marlin:
 - `M30`: dangerous in Marlin context because Marlin documents `M30` as delete SD file, not just program end.
 - `G17`, `G18`, `G19` plus `G2/G3`: this Marlin setup reported arc capability but rejected/failed required plane/arc behavior in practice. Convert to explicit `G1`.
 - Bare modal lines like `X...`, `Y...`, `Z...`, `F...` without explicit `G0/G1`: reject or normalize to explicit motion commands.
-- Negative X/Y/Z values are blocked by the current validators because work origin is bottom-left and proven job coordinates are positive.
+- Negative X/Y values are blocked by the current validators because the work origin is bottom-left. Negative Z is allowed for corrected top-surface-zero Fusion jobs.
 
 ## Converter Behavior
 
@@ -181,7 +182,7 @@ G-code workflow:
 2. If original Fusion/GRBL export: click `Convert Fusion/GRBL to Marlin G0/G1`.
 3. Preview the converted file. Blue path is sampled XY toolpath. Red path is outer extents/dry-run box, not a true extracted contour.
 4. Move machine manually/jog to bottom-left touch-off point.
-5. Set bottom-left XY with `G92 X0 Y0`, or set scratch point with `G92 X0 Y0 Z4.2`.
+5. Set bottom-left XY with `G92 X0 Y0`, or set scratch point with the Z reference expected by the file. Use `G92 X0 Y0 Z0` for negative-Z top-surface-zero jobs; use `G92 X0 Y0 Z4.2` only for the older positive-Z job.
 6. Use dry-run outer extents at highest Z before cutting.
 7. Start spindle manually.
 8. Run only validated converted/normalized files.
@@ -213,7 +214,7 @@ The web runner and CLI validator should reject:
 - `G2`, `G3`
 - `G17`, `G18`, `G19`
 - Bare modal axis/feed lines starting with `X`, `Y`, `Z`, `E`, `F`, `I`, `J`, or `K`
-- Negative X/Y/Z coordinates
+- Negative X/Y coordinates
 
 The reason is not theoretical purity; it is based on this machine’s observed Marlin behavior. Marlin reported `Cap:ARCS:1`, but actual files containing plane switches/arcs and bare modal lines failed. Explicit `G0/G1` worked reliably.
 

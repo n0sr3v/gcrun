@@ -254,7 +254,7 @@ def validate_marlin_job(lines):
             )
         axes = {axis.upper(): float(value) for axis, value in AXIS_RE.findall(line)}
         for axis, value in axes.items():
-            if value < 0:
+            if axis in {"X", "Y"} and value < 0:
                 errors.append(
                     {
                         "line": raw_line,
@@ -680,7 +680,7 @@ INDEX_HTML = """
       <div class="row" style="margin-top: 10px;">
         <button onclick="setBottomLeft()">Set bottom-left XY (G92 X0 Y0)</button>
         <label class="muted">Scratch surface Z</label>
-        <input id="surface-z" type="number" step="0.01" value="4.2" style="width: 90px;" />
+        <input id="surface-z" type="number" step="0.01" value="0" style="width: 90px;" />
         <button onclick="setScratchPoint()">Set scratch point (G92 X0 Y0 Z)</button>
         <label class="muted">Outer dry feed</label>
         <input id="dry-feed" type="number" step="1" value="1500" style="width: 90px;" />

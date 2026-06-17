@@ -42,7 +42,7 @@ def validate_commands(commands):
             raise ValueError(f"Bare modal axis/feed line at command {index}: {line}")
         for axis, value in AXIS_RE.findall(line):
             numeric = float(value)
-            if numeric < 0:
+            if axis.upper() in {"X", "Y"} and numeric < 0:
                 raise ValueError(f"Negative {axis.upper()} at command {index}: {line}")
             ranges[axis.upper()][0] = min(ranges[axis.upper()][0], numeric)
             ranges[axis.upper()][1] = max(ranges[axis.upper()][1], numeric)
