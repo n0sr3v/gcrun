@@ -2,3 +2,4 @@ server.log
 app.log
 *.log
 __pycache__/
+tmp_android_linker_test/
