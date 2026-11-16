@@ -33,7 +33,7 @@ def load_commands(path):
     return commands
 
 
-def validate_commands(commands):
+def validate_commands(commands, allow_negative_xy=False):
     ranges = {axis: [float("inf"), float("-inf")] for axis in "XYZ"}
     for index, line in enumerate(commands, 1):
         if UNSUPPORTED_RE.search(line):
@@ -42,7 +42,7 @@ def validate_commands(commands):
             raise ValueError(f"Bare modal axis/feed line at command {index}: {line}")
         for axis, value in AXIS_RE.findall(line):
             numeric = float(value)
-            if axis.upper() in {"X", "Y"} and numeric < 0:
+            if axis.upper() in {"X", "Y"} and numeric < 0 and not allow_negative_xy:
                 raise ValueError(f"Negative {axis.upper()} at command {index}: {line}")
             ranges[axis.upper()][0] = min(ranges[axis.upper()][0], numeric)
             ranges[axis.upper()][1] = max(ranges[axis.upper()][1], numeric)
@@ -117,7 +117,7 @@ def lift_z(port, baud, amount):
 
 def run_file(args):
     commands = load_commands(args.file)
-    ranges = validate_commands(commands)
+    ranges = validate_commands(commands, allow_negative_xy=args.allow_negative_xy)
     print(f"file: {args.file}")
     print(f"commands: {len(commands)}")
     print(f"ranges: {ranges}")
@@ -188,6 +188,11 @@ def main():
     run.add_argument("--verbose", action="store_true")
     run.add_argument("--dry-check", action="store_true")
     run.add_argument("--yes", action="store_true")
+    run.add_argument(
+        "--allow-negative-xy",
+        action="store_true",
+        help="Allow jobs whose work origin is not bottom-left, such as top-center with negative Y.",
+    )
 
     args = parser.parse_args()
     if args.command == "pos":

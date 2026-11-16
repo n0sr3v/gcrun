@@ -4,7 +4,7 @@ This repo controls a Marlin/RAMPS-style machine from Android Termux. Treat it as
 
 ## Environment
 
-- Working directory: `/data/data/com.termux/files/home/gcrun`.
+- Working directory: `/data/data/com.termux/files/home/Repository/gcrun`.
 - Runtime: Android Termux.
 - Web UI: Flask app in `app.py`, served on `0.0.0.0:5000`.
 - Primary connection path: USB Serial Telnet Server bridge on `socket://127.0.0.1:2323`.
@@ -20,12 +20,14 @@ This repo controls a Marlin/RAMPS-style machine from Android Termux. Treat it as
 - Do not disable steppers at job end. Z can sag/drop if motors are disabled.
 - The machine can be homed with `G28` only when the user explicitly says it is safe. Never include `G28` in normal cutting files.
 - User often starts at the bottom-left of the workpiece. That position is also near machine minimum X/Y, so negative X/Y from the work origin is unsafe.
+- Some newer jobs intentionally use a non-bottom-left origin. `1002.nc` uses top-center/top-edge as `X0 Y0`, so its valid cutting area includes negative X and negative Y. Only allow negative X/Y when that origin mode is explicitly selected and the converted extents are reviewed.
 - For the proven `1001` job, work coordinates are non-negative:
   - `X`: `0.0 .. 189.4`
   - `Y`: `0.0 .. 46.55`
   - `Z`: `1.4 .. 16.5`
 - Earlier proven touch-off convention for the first `1001` job: user touched/scratched the alloy surface at bottom-left, then set `G92 X0 Y0 Z4.2`.
 - Newer Fusion exports may use the corrected CNC convention: physical top surface is `Z0`, cutting depths are negative, and scratch/touch-off should use `G92 X0 Y0 Z0`.
+- For `1002.nc`, align the tool to the top-center/top-edge WCS point on the part, touch/scratch the top surface, and use `G92 X0 Y0 Z0`. The corrected converted path extents are approximately `X -148.9513..148.9513`, `Y -227.45..0.0`, `Z -1.0..20.0`.
 - Always inspect the selected file's Z range before setting the scratch reference. A file with negative cutting Z expects top-surface `Z0`; a file with only positive cutting Z may be using the older `Z4.2` surface convention.
 - The user observed Z motion seemed strange, possibly due firmware steps/mm or mechanical calibration. Always surface Z-range and depth assumptions before cutting.
 
@@ -70,19 +72,34 @@ If connection fails:
 - `cnc_job.py`: CLI runner for probe/position/lift/stop/run. It validates and streams one command at a time.
 - `connect_check.py`: Android/Termux connection diagnostics.
 - `README.md`: User-facing workflow documentation.
+- `DOGBONE_CUTOUTS.md`: Proven rectangular cutout, minimal dogbone, continuous-ramp, and GUI-generator specification.
 - `preperations/1001.nc`: Original Fusion 360 GRBL export.
+- `preperations/1002.nc`: Fusion 360 GRBL export with top-center/top-edge origin.
 - `preperations/chatgpt_fusion360-path-setup_2026-05-21T10-28-14+0200.md`: Prior reasoning and Fusion setup notes.
 - `preperations/Fusion360 Path Setup_Tought_Process.pdf`: Prior thought process dump for the conversion discussion.
 - `1001_fusion_marlin_converted.nc`: Converted output generated from `preperations/1001.nc`.
 - `1001_marlin_linearized_marlin_zhop_start.nc`: Previously normalized full job with explicit initial Z-hop.
 - `1001_marlin_linearized_marlin.nc`: Normalized full job without extra first Z-hop.
 - `1001_marlin_linearized_marlin_resume_from_line70.nc`: Resume variant used after an interrupted/manual run.
+- `1002_marlin_g01.nc`: Converted `1002.nc` output. Requires explicit negative-XY origin mode.
 - `1001_arc_short_air_dryrun.nc`, `1001_linearized_short_air_dryrun.nc`, `marlin_xy_arc_test*.nc`: test/dry-run files used during machine bring-up.
 
 One-off older USB experiments may remain untracked:
 
 - `bridge_ftdi.py`, `ftdi_tcp_bridge.py`, `identify_usb.py`, `test_usb.py`, `check_fd*.py`, `run_bridge.sh`.
 - Treat these as historical experiments unless the user asks to revisit native USB.
+
+## Direct Rectangular Cutout Knowledge
+
+- The proven direct cutout was a finished `41.9 x 42.4 mm` opening in approximately `2 mm` aluminium with a `1.5 mm` cutter.
+- Its work origin was the finished top-left corner, with `+X` right and `-Y` down. The scratch/top surface was set with `G92 X0 Y0 Z0`.
+- Cutter radius compensation produces a `40.4 x 40.9 mm` normal centerline rectangle. For cutter radius `r`, a minimal 45-degree dogbone center is `r / sqrt(2)` from each adjacent design wall.
+- For `r=0.75`, the dogbone center is `0.53033 mm` from each wall, relief beyond each finished wall is `0.21967 mm`, and diagonal excursion from the compensated corner is `0.31066 mm`.
+- Dogbones must be out-and-back excursions from each normal compensated corner. Connecting only dogbone points distorts the straight walls.
+- The proven cut used 12 continuous ramps of `0.2 mm` per full contour to `Z-2.4`, then one full-depth cleanup contour at `F500`. It retracted to `Z5` and returned to `X0 Y0`.
+- Continuous ramp Z is interpolated by cumulative XY path length over each complete contour. This avoids direct plunges and reaches each requested step-down at the contour endpoint.
+- The separate proven dry run contained no Z commands, preserved `Z85`, traced the same compensated/dogbone XY path, and returned to `X0 Y0`.
+- Read `DOGBONE_CUTOUTS.md` before changing or implementing the GUI cutout generator; it contains formulas, path ordering, validation, preview, clearance, and loose-slug requirements.
 
 ## Fusion 360 Workflow Knowledge
 
@@ -115,7 +132,7 @@ Known problematic GRBL/Fusion commands for Marlin:
 - `M30`: dangerous in Marlin context because Marlin documents `M30` as delete SD file, not just program end.
 - `G17`, `G18`, `G19` plus `G2/G3`: this Marlin setup reported arc capability but rejected/failed required plane/arc behavior in practice. Convert to explicit `G1`.
 - Bare modal lines like `X...`, `Y...`, `Z...`, `F...` without explicit `G0/G1`: reject or normalize to explicit motion commands.
-- Negative X/Y values are blocked by the current validators because the work origin is bottom-left. Negative Z is allowed for corrected top-surface-zero Fusion jobs.
+- Negative X/Y values are blocked by default because bottom-left work origins should not move below origin. They can be explicitly allowed for center/top-edge-origin jobs after verifying extents. Negative Z is allowed for corrected top-surface-zero Fusion jobs.
 
 ## Converter Behavior
 
@@ -181,8 +198,8 @@ G-code workflow:
 1. Upload/select original Fusion `.nc` or already converted `.nc`.
 2. If original Fusion/GRBL export: click `Convert Fusion/GRBL to Marlin G0/G1`.
 3. Preview the converted file. Blue path is sampled XY toolpath. Red path is outer extents/dry-run box, not a true extracted contour.
-4. Move machine manually/jog to bottom-left touch-off point.
-5. Set bottom-left XY with `G92 X0 Y0`, or set scratch point with the Z reference expected by the file. Use `G92 X0 Y0 Z0` for negative-Z top-surface-zero jobs; use `G92 X0 Y0 Z4.2` only for the older positive-Z job.
+4. Move machine manually/jog to the Fusion WCS touch-off point: usually bottom-left, or top-center/top-edge for jobs like `1002.nc`.
+5. Set current XY with `G92 X0 Y0`, or set scratch point with the Z reference expected by the file. Use `G92 X0 Y0 Z0` for negative-Z top-surface-zero jobs; use `G92 X0 Y0 Z4.2` only for the older positive-Z job.
 6. Use dry-run outer extents at highest Z before cutting.
 7. Start spindle manually.
 8. Run only validated converted/normalized files.

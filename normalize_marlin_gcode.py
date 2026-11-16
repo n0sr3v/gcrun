@@ -184,7 +184,6 @@ def convert_lines(raw_lines, tolerance=0.05, initial_z=16.5, include_comments=Tr
             for index, point in enumerate(points):
                 output.append(format_linear("G1", point, feed=feed if index == 0 else None))
             pos = target
-            motion_mode = "G1"
             continue
 
         if m_codes:
@@ -199,7 +198,7 @@ def convert_lines(raw_lines, tolerance=0.05, initial_z=16.5, include_comments=Tr
 
     if not emitted_setup:
         output.insert(3, "; Source did not explicitly request metric mode; assuming millimeters.")
-    output.extend(["M400", "G90", "G0 Z16.5", "G0 X0 Y0", "M400"])
+    output.extend(["M400", "G90", f"G0 Z{format_number(initial_z)}", "G0 X0 Y0", "M400"])
     return output
 
 

@@ -230,7 +230,7 @@ def load_clean_gcode_lines(path):
     return lines
 
 
-def validate_marlin_job(lines):
+def validate_marlin_job(lines, allow_negative_xy=False):
     errors = []
     warnings = []
     for index, item in enumerate(lines, start=1):
@@ -254,7 +254,7 @@ def validate_marlin_job(lines):
             )
         axes = {axis.upper(): float(value) for axis, value in AXIS_RE.findall(line)}
         for axis, value in axes.items():
-            if axis in {"X", "Y"} and value < 0:
+            if axis in {"X", "Y"} and value < 0 and not allow_negative_xy:
                 errors.append(
                     {
                         "line": raw_line,
@@ -278,10 +278,10 @@ def validate_marlin_job(lines):
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
-def analyze_gcode_file(name):
+def analyze_gcode_file(name, allow_negative_xy=False):
     path = resolve_gcode_file(name)
     lines = load_clean_gcode_lines(path)
-    validation = validate_marlin_job(lines)
+    validation = validate_marlin_job(lines, allow_negative_xy=allow_negative_xy)
     pos = {"x": 0.0, "y": 0.0, "z": 0.0}
     ranges = {
         "x": {"min": None, "max": None},
@@ -332,6 +332,7 @@ def analyze_gcode_file(name):
         "points": points,
         "outer": outer,
         "validation": validation,
+        "allow_negative_xy": allow_negative_xy,
     }
 
 
@@ -379,14 +380,14 @@ class GCodeRunner:
             "error": None,
         }
 
-    def start(self, name, surface_z=None, set_origin=False, validate=True):
+    def start(self, name, surface_z=None, set_origin=False, validate=True, allow_negative_xy=False):
         path = resolve_gcode_file(name)
         with self._lock:
             if self.status["running"]:
                 raise RuntimeError("A G-code job is already running")
             clean_items = load_clean_gcode_lines(path)
             if validate:
-                validation = validate_marlin_job(clean_items)
+                validation = validate_marlin_job(clean_items, allow_negative_xy=allow_negative_xy)
                 if not validation["ok"]:
                     first = validation["errors"][0]
                     raise RuntimeError(
@@ -678,13 +679,19 @@ INDEX_HTML = """
         <input id="convert-initial-z" type="number" step="0.1" value="16.5" style="width: 90px;" />
       </div>
       <div class="row" style="margin-top: 10px;">
-        <button onclick="setBottomLeft()">Set bottom-left XY (G92 X0 Y0)</button>
+        <button onclick="setBottomLeft()">Set current XY zero (G92 X0 Y0)</button>
         <label class="muted">Scratch surface Z</label>
         <input id="surface-z" type="number" step="0.01" value="0" style="width: 90px;" />
         <button onclick="setScratchPoint()">Set scratch point (G92 X0 Y0 Z)</button>
         <label class="muted">Outer dry feed</label>
         <input id="dry-feed" type="number" step="1" value="1500" style="width: 90px;" />
         <button onclick="dryRunOuter()">Dry-run outer extents at highest Z</button>
+      </div>
+      <div class="row" style="margin-top: 10px;">
+        <label class="muted">
+          <input type="checkbox" id="allow-negative-xy" />
+          Allow negative X/Y for center/top-edge origins
+        </label>
       </div>
       <div class="row" style="margin-top: 10px;">
         <label class="muted">
@@ -788,6 +795,7 @@ INDEX_HTML = """
         convertTolerance: "cnc-convert-tolerance",
         convertInitialZ: "cnc-convert-initial-z",
         runSetOrigin: "cnc-run-set-origin",
+        allowNegativeXY: "cnc-allow-negative-xy",
         absX: "cnc-abs-x",
         absY: "cnc-abs-y",
         absZ: "cnc-abs-z",
@@ -940,7 +948,8 @@ INDEX_HTML = """
           return;
         }
         localStorage.setItem(storageKeys.gcodeFile, file);
-        const res = await fetch(`/gcode_preview?file=${encodeURIComponent(file)}`);
+        const allowNegativeXY = document.getElementById("allow-negative-xy").checked;
+        const res = await fetch(`/gcode_preview?file=${encodeURIComponent(file)}&allow_negative_xy=${allowNegativeXY ? "1" : "0"}`);
         const data = await res.json();
         if (!res.ok) {
           gcodePreview = null;
@@ -965,6 +974,7 @@ INDEX_HTML = """
         const file = document.getElementById("gcode-file").value;
         const tolerance = parseNumber("convert-tolerance") || 0.05;
         const initialZ = parseNumber("convert-initial-z") || 16.5;
+        const allowNegativeXY = document.getElementById("allow-negative-xy").checked;
         if (!file) {
           alert("No G-code file selected.");
           return;
@@ -973,7 +983,7 @@ INDEX_HTML = """
         const res = await fetch("/convert_gcode", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file, tolerance, initial_z: initialZ })
+          body: JSON.stringify({ file, tolerance, initial_z: initialZ, allow_negative_xy: allowNegativeXY })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -996,7 +1006,7 @@ INDEX_HTML = """
       }
 
       async function setBottomLeft() {
-        if (!confirm("Set current XY as work bottom-left with G92 X0 Y0?")) return;
+        if (!confirm("Set current XY as work X0 Y0 with G92 X0 Y0?")) return;
         const res = await fetch("/work_origin/xy", { method: "POST" });
         const data = await res.json();
         if (!res.ok) alert(data.error || "Failed to set bottom-left XY.");
@@ -1029,11 +1039,12 @@ INDEX_HTML = """
           alert("No G-code file selected.");
           return;
         }
+        const allowNegativeXY = document.getElementById("allow-negative-xy").checked;
         if (!confirm(`Dry-run the outer XY extents of ${file} at its highest Z?`)) return;
         const res = await fetch("/dry_run_outer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file, feed })
+          body: JSON.stringify({ file, feed, allow_negative_xy: allowNegativeXY })
         });
         const data = await res.json();
         if (!res.ok) alert(data.error || "Failed to dry-run outer extents.");
@@ -1054,10 +1065,11 @@ INDEX_HTML = """
         localStorage.setItem(storageKeys.gcodeFile, file);
         const surfaceZ = parseNumber("surface-z");
         const setOrigin = document.getElementById("run-set-origin").checked;
+        const allowNegativeXY = document.getElementById("allow-negative-xy").checked;
         const res = await fetch("/run_gcode", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file, surface_z: surfaceZ, set_origin: setOrigin })
+          body: JSON.stringify({ file, surface_z: surfaceZ, set_origin: setOrigin, allow_negative_xy: allowNegativeXY })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -1178,12 +1190,16 @@ INDEX_HTML = """
         const convertTolerance = localStorage.getItem(storageKeys.convertTolerance);
         const convertInitialZ = localStorage.getItem(storageKeys.convertInitialZ);
         const runSetOrigin = localStorage.getItem(storageKeys.runSetOrigin);
+        const allowNegativeXY = localStorage.getItem(storageKeys.allowNegativeXY);
         if (surfaceZ !== null) document.getElementById("surface-z").value = surfaceZ;
         if (dryFeed !== null) document.getElementById("dry-feed").value = dryFeed;
         if (convertTolerance !== null) document.getElementById("convert-tolerance").value = convertTolerance;
         if (convertInitialZ !== null) document.getElementById("convert-initial-z").value = convertInitialZ;
         if (runSetOrigin !== null) {
           document.getElementById("run-set-origin").checked = runSetOrigin === "true";
+        }
+        if (allowNegativeXY !== null) {
+          document.getElementById("allow-negative-xy").checked = allowNegativeXY === "true";
         }
         document.getElementById("surface-z").addEventListener("input", event => {
           localStorage.setItem(storageKeys.surfaceZ, event.target.value);
@@ -1199,6 +1215,10 @@ INDEX_HTML = """
         });
         document.getElementById("run-set-origin").addEventListener("change", event => {
           localStorage.setItem(storageKeys.runSetOrigin, event.target.checked);
+        });
+        document.getElementById("allow-negative-xy").addEventListener("change", event => {
+          localStorage.setItem(storageKeys.allowNegativeXY, event.target.checked);
+          loadGcodePreview();
         });
       }
 
@@ -1716,8 +1736,9 @@ def upload_gcode():
 @app.get("/gcode_preview")
 def gcode_preview():
     name = request.args.get("file", "")
+    allow_negative_xy = request.args.get("allow_negative_xy", "").lower() in {"1", "true", "yes", "on"}
     try:
-        preview = analyze_gcode_file(name)
+        preview = analyze_gcode_file(name, allow_negative_xy=allow_negative_xy)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"preview": preview})
@@ -1735,13 +1756,14 @@ def convert_gcode():
         dst = os.path.abspath(os.path.join(os.getcwd(), dst_name))
         tolerance = float(data.get("tolerance") or 0.05)
         initial_z = float(data.get("initial_z") or 16.5)
+        allow_negative_xy = bool(data.get("allow_negative_xy", False))
         normalize_file(
             src=Path(src),
             dst=Path(dst),
             tolerance=tolerance,
             initial_z=initial_z,
         )
-        preview = analyze_gcode_file(dst_name)
+        preview = analyze_gcode_file(dst_name, allow_negative_xy=allow_negative_xy)
         if not preview["validation"]["ok"]:
             raise RuntimeError("Converted file did not pass Marlin validation")
     except Exception as exc:
@@ -1759,13 +1781,20 @@ def run_gcode():
     data = request.get_json(force=True)
     name = data.get("file", "")
     set_origin = bool(data.get("set_origin", False))
+    allow_negative_xy = bool(data.get("allow_negative_xy", False))
     surface_z = data.get("surface_z")
     if surface_z in ("", None):
         surface_z = None
     else:
         surface_z = float(surface_z)
     try:
-        runner.start(name, surface_z=surface_z, set_origin=set_origin, validate=True)
+        runner.start(
+            name,
+            surface_z=surface_z,
+            set_origin=set_origin,
+            validate=True,
+            allow_negative_xy=allow_negative_xy,
+        )
     except Exception as exc:
         return jsonify({"error": str(exc), "status": runner.snapshot()}), 400
     return jsonify({"ok": True, "status": runner.snapshot()})
@@ -1805,7 +1834,8 @@ def dry_run_outer():
     name = data.get("file", "")
     try:
         feed = float(data.get("feed") or 1500)
-        analysis = analyze_gcode_file(name)
+        allow_negative_xy = bool(data.get("allow_negative_xy", False))
+        analysis = analyze_gcode_file(name, allow_negative_xy=allow_negative_xy)
         validation = analysis["validation"]
         if not validation["ok"]:
             first = validation["errors"][0]
