@@ -9,6 +9,7 @@ Local CNC control and experiment repo for a Marlin + RAMPS 1.4 setup. This READM
 - Open: `http://localhost:5000`
 
 ## Project index
+- [isel-cnc session, 2026-11-17](cnc-session-2026-11-17.md) — German report covering the four contour cuts, tool change, USB/homing recovery, and two-point edge machining.
 - `app.py` — Flask + pyserial CNC control UI. Provides jog controls, M114 position query, raw G-code send, and a full send/receive log.
 - `requirements.txt` — Python dependencies for the web UI.
 - `run_server.cmd` — Launches the Flask app in the background and redirects logs to `server.log`.
